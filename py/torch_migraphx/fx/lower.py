@@ -28,6 +28,7 @@
 #####################################################################################
 import dataclasses as dc
 import logging
+import os
 from typing import Any, Callable, Optional, Sequence
 
 import migraphx
@@ -46,9 +47,12 @@ from .tools.mgx_splitter import MGXSplitter, MGXSplitterSetting
 from .tracer.acc_tracer import acc_tracer
 from .tracer.aten_tracer import aten_tracer
 from .mgx_module import MGXModule
-from .utils import LowerPrecision
+from .utils import LowerPrecision, SuppressPrints, SetLogLevel, get_graph_info
 
-logger = logging.getLogger(__name__)
+_LOGGER = logging.getLogger(__name__)
+LOWERER_LOGLEVEL = os.environ.get('TORCH_MIGRAPHX_LOG_FX_LOWER', None)
+if LOWERER_LOGLEVEL:
+    _LOGGER.setLevel(LOWERER_LOGLEVEL)
 Input = Sequence[Any]
 
 
@@ -88,18 +92,24 @@ def lower_to_mgx(module: nn.Module,
     """
     module = module.cpu().eval()
     input = [to_device(x, "cpu") for x in input]
-    lower_setting = LowerSetting(
-        lower_precision=lower_precision,
-        verbose_log=verbose_log,
-        min_acc_module_size=min_acc_module_size,
-        suppress_accuracy_check=suppress_accuracy_check,
-        save_subgraph_programs=save_subgraph_programs,
-        tracer_base_cls=tracer_base_cls,
-        leaf_module_list=leaf_modules,
-        use_aten=use_aten,
-    )
-    lowerer = Lowerer.create(lower_setting=lower_setting)
-    return lowerer(module, input)
+
+    if verbose_log and _LOGGER.level > logging.INFO:
+        log_level = logging.INFO
+    else:
+        log_level = _LOGGER.level
+
+    with SetLogLevel(_LOGGER, log_level):
+        lower_setting = LowerSetting(
+            lower_precision=lower_precision,
+            min_acc_module_size=min_acc_module_size,
+            suppress_accuracy_check=suppress_accuracy_check,
+            save_subgraph_programs=save_subgraph_programs,
+            tracer_base_cls=tracer_base_cls,
+            leaf_module_list=leaf_modules,
+            use_aten=use_aten,
+        )
+        lowerer = Lowerer.create(lower_setting=lower_setting)
+        return lowerer(module, input)
 
 
 @dc.dataclass
@@ -111,10 +121,12 @@ class LowerMgxInterpreter:
         return LowerMgxInterpreter(lower_setting)
 
     def __call__(self, mod, input, split_name) -> MGXInterpreter:
-        logger.info(f"split_name={split_name}")
+        _LOGGER.info(f"Running MGXInterpreter for {split_name}")
         AccShapeProp(mod).propagate(*input)
-        interpreter = MGXInterpreter(
-            mod, input, verbose_log=self.lower_setting.verbose_log)
+        input_shapes = [(i.shape, i.dtype) for i in input]
+        _LOGGER.debug(f"Input Shapes: {input_shapes}")
+        _LOGGER.debug(f"{split_name} Graph:\n{get_graph_info(mod.graph)}")
+        interpreter = MGXInterpreter(mod, input)
         interpreter.run()
 
         return interpreter
@@ -125,8 +137,9 @@ def default_split_function(model: fx.GraphModule, inputs: Input,
     splitter_setting = MGXSplitterSetting()
     splitter_setting.min_acc_module_size = lower_setting.min_acc_module_size
     splitter = MGXSplitter(model, inputs, settings=splitter_setting)
-    if lower_setting.verbose_log:
-        splitter.node_support_preview()
+    with SuppressPrints():
+        node_preview = splitter.node_support_preview()
+    _LOGGER.info(f"\n{node_preview}")
     return splitter.generate_split_results()
 
 
@@ -147,6 +160,8 @@ def default_lower_pass(
         """
         interpreter = create_mgx_interpreter(lower_setting)
         interp_res: MGXInterpreter = interpreter(mod, input, module_name)
+        
+        _LOGGER.debug(f"Interpreted MIGraphX Program:\n{interp_res.program}")
 
         if lower_setting.save_subgraph_programs:
             migraphx.save(interp_res.program, f'{module_name}.mxr')
@@ -158,6 +173,8 @@ def default_lower_pass(
             input_names=interp_res.get_input_names(),
             quantize_fp16=fp16_mode,
         )
+        
+        _LOGGER.debug(f"Compiled MIGraphX Program:\n{mgx_module.program}")
         return mgx_module
 
     return lower_pass

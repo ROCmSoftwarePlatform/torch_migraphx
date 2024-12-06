@@ -75,7 +75,6 @@ class LowerSetting(LowerSettingBasic):
     instance of Lowerer.
     """
 
-    verbose_log: bool = False
     explicit_precision: bool = False
     preset_lowerer: str = ""
     suppress_accuracy_check: bool = False

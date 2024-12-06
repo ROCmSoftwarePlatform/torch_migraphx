@@ -27,7 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #####################################################################################
 from typing import Iterable
-import warnings
+import os
 import torch
 import torch.fx
 import migraphx
@@ -36,15 +36,17 @@ from .converter_registry import CONVERTERS
 from .utils import *
 from .mgx_module import MGXInstruction
 from .converters.utils import convert_arg
+import logging
+
+_LOGGER = logging.getLogger(__name__)
+INTERPRETER_LOGLEVEL = os.environ.get('TORCH_MIGRAPHX_LOG_INTERPRETER', None)
+if INTERPRETER_LOGLEVEL:
+    _LOGGER.setLevel(INTERPRETER_LOGLEVEL)
 
 
 class MGXInterpreter(torch.fx.Interpreter):
 
-    def __init__(self,
-                 module,
-                 sample_inputs,
-                 deallocate=False,
-                 verbose_log=False):
+    def __init__(self, module, sample_inputs, deallocate=False):
         super().__init__(module)
 
         self.program = migraphx.program()
@@ -56,7 +58,7 @@ class MGXInterpreter(torch.fx.Interpreter):
         self._outputs = []
         self.unsupported_ops = self.validate_conversion()
         if self.unsupported_ops:
-            warnings.warn(
+            _LOGGER.warning(
                 'Torch model contains the following unsupported operations: \n'
                 + '\n'.join(f'{i}' for i in self.unsupported_ops))
         self.deallocate = deallocate
@@ -78,12 +80,15 @@ class MGXInterpreter(torch.fx.Interpreter):
         return missing_converters
 
     def run(self):
+        _LOGGER.info(f"Running MGXInterpreter for:\n{self.module.graph}")
         super().run()
         output_instr_refs = [i.instr_ref for i in self._outputs]
         self.mm.add_return(output_instr_refs)
+        _LOGGER.info(f"Parsed MIGraphX Program:\n{self.program}")
         return self.program
 
     def run_node(self, n):
+        _LOGGER.debug(f"MGXInterpreter running node:\n{get_node_info(n)}")
         args, kwargs = self.fetch_args_kwargs_from_env(n)
         assert isinstance(args, tuple)
         assert isinstance(kwargs, dict)
@@ -106,9 +111,7 @@ class MGXInterpreter(torch.fx.Interpreter):
 
     def call_module(self, node, args, kwargs):
         assert isinstance(node.target, str)
-        # print(f'call module: {args}')
         submod = self.fetch_attr(node.target)
-        # submod_type = getattr(submod, '_base_class_origin', type(submod))
         submod_type = type(submod)
         converter = CONVERTERS.get(submod_type)
 

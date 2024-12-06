@@ -29,14 +29,17 @@
 
 from typing import Sequence, Union
 import torch
+from ..fx.utils import get_node_info, get_graph_info, SetLogLevel
+
+
+def get_input_info(tensors: Sequence[torch.Tensor]):
+    return f'Input Sizes: {[tuple(i.size()) if isinstance(i, torch.Tensor) else f"scalar: {i}" for i in tensors]}'
 
 
 def print_graph_info(name: str, gm: torch.fx.GraphModule,
                      inputs: Union[Sequence[torch.Tensor], None]) -> None:
     print(f'\n{name}')
     if inputs:
-        print(
-            f'Input Sizes: {[tuple(i.size()) if isinstance(i, torch.Tensor) else f"scalar: {i}" for i in inputs]}'
-        )
-    gm.graph.print_tabular()
+        print(get_input_info(inputs))
+    print(get_graph_info(gm.graph))
     print()

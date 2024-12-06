@@ -28,38 +28,25 @@
 #####################################################################################
 import logging
 import os
-import torch
-import operator
-from .utils import log_pass
-
-_LOGGER = logging.getLogger(__name__)
-DYNAMO_LOGLEVEL = os.environ.get('TORCH_MIGRAPHX_LOG_DYNAMO_PASSES', None)
-if DYNAMO_LOGLEVEL:
-    _LOGGER.setLevel(DYNAMO_LOGLEVEL)
+from ..utils import get_graph_info
 
 
-@log_pass(_LOGGER, logging.DEBUG)
-def fix_tensor_meta(gm: torch.fx.GraphModule):
-    for node in gm.graph.nodes:
-        # This is only true for functions with multiple outputs
-        if node.op == "call_function" and not "tensor_meta" in node.meta and node.target != operator.getitem:
-            max_idx = -1
-            output_metas = {}
-            # Grab the output tensor metadata from following getitem nodes
-            for user, _ in node.users.items():
-                assert user.target == operator.getitem
-                getitem_idx = user.args[1]
-                max_idx = getitem_idx if getitem_idx > max_idx else max_idx
-                output_metas[getitem_idx] = user.meta["tensor_meta"]
+def log_pass(logger: logging.Logger, level: int):
 
-            # Construct a list of tensor metadata in the correct order
-            new_metas = [None for i in range(max_idx + 1)]
-            for i, meta in output_metas.items():
-                new_metas[i] = meta
+    def pass_wrapper(func):
 
-            # Add the metadata for each output as a tuple. This is not supported
-            # by the partitioner, so this transform should be done after
-            # using the partitioner to split the graph for partitions that need
-            # to be lowered to migraphx
-            node.meta["tensor_meta"] = tuple(new_metas)
-    return gm
+        def log_func(gm, *args, **kwargs):
+            logger.log(
+                level,
+                f"Pass: {func.__name__}\nIn Graph:\n{get_graph_info(gm.graph)}"
+            )
+            out = func(gm, *args, **kwargs)
+            logger.log(
+                level,
+                f"Pass: {func.__name__}\nOut Graph:\n{get_graph_info(gm.graph)}"
+            )
+            return out
+
+        return log_func
+
+    return pass_wrapper

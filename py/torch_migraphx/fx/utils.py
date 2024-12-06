@@ -27,6 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #####################################################################################
 import os
+import sys
 from enum import Enum
 from typing import List, Callable
 from packaging import version
@@ -39,6 +40,31 @@ from torch.fx.passes.shape_prop import TensorMetadata
 from typing import List
 
 HIPSTREAMTYPE = 'ihipStream_t'
+
+
+class SuppressPrints:
+
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout
+
+
+class SetLogLevel:
+
+    def __init__(self, logger, level):
+        self.logger = logger
+        self.level = level
+
+    def __enter__(self):
+        self.original_level = self.logger.level
+        self.logger.setLevel(self.level)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.logger.setLevel(self.original_level)
 
 
 class LowerPrecision(Enum):
@@ -183,16 +209,23 @@ def mgx_program_from_bytearray(barray: bytearray) -> migraphx.program:
     return prog
 
 
-def print_graph(graph: torch.fx.Graph) -> None:
+def get_node_info(node: torch.fx.Node) -> str:
+    node_info = 'Return' if node.op == 'output' else node.format_node()
+    out_str = f"{node_info}, args: {node.args}, kwargs: {node.kwargs}"
+    if 'tensor_meta' in node.meta:
+        out_str += tensor_meta_str(node.meta['tensor_meta'])
+    return out_str
+
+
+def get_graph_info(graph: torch.fx.Graph) -> str:
+    out_str = ""
     for node in graph.nodes:
-        node_info = 'Return' if node.op == 'output' else node.format_node()
-        out_str = f"{node_info}, args: {node.args}, kwargs: {node.kwargs}"
-        if 'tensor_meta' in node.meta:
-            out_str += tensor_meta_str(node.meta['tensor_meta'])
+        out_str += f"\n\t{get_node_info(node)}\n"
+    return out_str
 
-        print(out_str)
 
-    print()
+def print_graph(graph: torch.fx.Graph) -> None:
+    print(get_graph_info(graph))
 
 
 def tensor_meta_str(tm) -> str:

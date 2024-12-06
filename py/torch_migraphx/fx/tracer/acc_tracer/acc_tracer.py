@@ -591,9 +591,8 @@ def trace(
                                     or a callable (e.g. for op == "call_function").
     """
     if mod.training:
-        warnings.warn(
-            "acc_tracer does not support currently support models for training."
-            " Calling eval on model before tracing.")
+        _LOGGER.warning("acc_tracer does not support currently support models for training."
+                        " Calling eval on model before tracing.")
         mod.eval()
 
     assert isinstance(sample_inputs, (list, tuple))

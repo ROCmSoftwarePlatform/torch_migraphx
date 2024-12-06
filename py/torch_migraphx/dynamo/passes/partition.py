@@ -28,14 +28,23 @@
 #####################################################################################
 
 from typing import Dict, Optional, Sequence, Mapping
+import logging
+import os
 
 import torch
 from torch.fx.passes.infra.partitioner import CapabilityBasedPartitioner
 from torch.fx.passes.operator_support import OperatorSupport
 
 from torch_migraphx.fx.converter_registry import CONVERTERS
-from ..utils import print_graph_info
+from ..utils import get_graph_info, SetLogLevel
 from ...fx.utils import TYPE_MAP
+
+_LOGGER = logging.getLogger(__name__)
+DYNAMO_LOGLEVEL = os.environ.get('TORCH_MIGRAPHX_LOG_DYNAMO_PASSES', None)
+PARTITIONER_LOGLEVEL = os.environ.get('TORCH_MIGRAPHX_LOG_PARTITIONER',
+                                      DYNAMO_LOGLEVEL)
+if PARTITIONER_LOGLEVEL:
+    _LOGGER.setLevel(PARTITIONER_LOGLEVEL)
 
 
 class MGXOperatorSupport(OperatorSupport):
@@ -66,14 +75,19 @@ class MGXOperatorSupport(OperatorSupport):
                 self.unsupported.add(node.target)
             return False
 
-    def print_support_summary(self):
-        print('Supported Nodes: ')
+    def support_summary(self):
+        summary = "Supported Nodes:\n"
         for n in self.supported:
-            print(n)
+            summary += f"\t{n}\n"
 
-        print('\nUnsupported Nodes: ')
+        summary += "\nUnsupported Nodes:\n"
         for n in self.unsupported:
-            print(n)
+            summary += f"\t{n}\n"
+
+        return summary
+
+    def print_support_summary(self):
+        print(self.support_summary())
 
 
 def partition(gm: torch.fx.GraphModule,
@@ -90,20 +104,25 @@ def partition(gm: torch.fx.GraphModule,
     op_support = MGXOperatorSupport()
     partitioner = CapabilityBasedPartitioner(gm, op_support)
 
-    partitons = partitioner.propose_partitions()
-    fused_gm = partitioner.fuse_partitions(partitons)
+    partitions = partitioner.propose_partitions()
+    fused_gm = partitioner.fuse_partitions(partitions)
     fused_gm.graph.eliminate_dead_code()
     fused_gm.recompile()
     fused_gm.delete_all_unused_submodules()
 
-    if verbose:
-        print_graph_info("Partitioned Module", fused_gm, None)
-        op_support.print_support_summary()
+    log_level = _LOGGER.level
+    if verbose and _LOGGER.level > logging.INFO:
+        log_level = logging.INFO
+
+    with SetLogLevel(_LOGGER, log_level):
+        _LOGGER.debug(f"Partitioned Module:\n{get_graph_info(fused_gm.graph)}")
+        _LOGGER.info(f"Node support summary:\n{op_support.support_summary()}")
+        _LOGGER.info(f"Number of partitions: {len(partitions)}")
 
     # TODO: Compute number of partitions after dead code elimination
-    if len(partitons) > max_partitions:
+    if len(partitions) > max_partitions:
         raise RuntimeError(
-            f'Found {len(partitons)} partitions, max allowed: {max_partitions}.'
+            f'Found {len(partitions)} partitions, max allowed: {max_partitions}.'
         )
 
     return fused_gm

@@ -26,11 +26,19 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #####################################################################################
-
+import logging
+import os
 import torch
 import torch.fx
+from .utils import log_pass
+
+_LOGGER = logging.getLogger(__name__)
+DYNAMO_LOGLEVEL = os.environ.get('TORCH_MIGRAPHX_LOG_DYNAMO_PASSES', None)
+if DYNAMO_LOGLEVEL:
+    _LOGGER.setLevel(DYNAMO_LOGLEVEL)
 
 
+@log_pass(_LOGGER, logging.DEBUG)
 def remove_clone_ops(gm: torch.fx.GraphModule):
     clone_ops = [
         torch.ops.aten.clone.default,
@@ -46,6 +54,7 @@ def remove_clone_ops(gm: torch.fx.GraphModule):
     return gm
 
 
+@log_pass(_LOGGER, logging.DEBUG)
 def remove_view_ops(gm: torch.fx.GraphModule):
     view_ops = [
         torch.ops.aten._unsafe_view.default,
@@ -69,8 +78,10 @@ def remove_view_ops(gm: torch.fx.GraphModule):
     return gm
 
 
+@log_pass(_LOGGER, logging.DEBUG)
 def remove_const_ops(gm: torch.fx.GraphModule, device: str = "cuda"):
 
+    @log_pass(_LOGGER, logging.DEBUG)
     def _remove_new_const_ops(gm: torch.fx.GraphModule):
         const_ops = {
             torch.ops.aten.new_zeros.default: torch.zeros,
@@ -98,6 +109,7 @@ def remove_const_ops(gm: torch.fx.GraphModule, device: str = "cuda"):
         gm.graph.eliminate_dead_code()
         gm.recompile()
 
+    @log_pass(_LOGGER, logging.DEBUG)
     def _remove_const_like_ops(gm: torch.fx.GraphModule):
         const_ops = {
             torch.ops.aten.full_like.default: torch.full,
@@ -129,6 +141,7 @@ def remove_const_ops(gm: torch.fx.GraphModule, device: str = "cuda"):
         gm.graph.eliminate_dead_code()
         gm.recompile()
 
+    @log_pass(_LOGGER, logging.DEBUG)
     def _remove_range_ops(gm: torch.fx.GraphModule):
         const_ops = {
             torch.ops.aten.arange.start: torch.arange,

@@ -28,6 +28,8 @@
 #####################################################################################
 
 from typing import Sequence
+import logging
+import os
 
 import torch
 from torch.fx.passes.shape_prop import ShapeProp
@@ -39,7 +41,12 @@ from torch_migraphx.fx.passes.pass_utils import validate_inference
 
 from .passes.pass_manager import pre_partition_pass, post_partition_pass
 from .passes.partition import partition, get_partition_inputs
-from .utils import print_graph_info
+from .utils import get_input_info, get_graph_info, SetLogLevel
+
+_LOGGER = logging.getLogger(__name__)
+DYNAMO_LOGLEVEL = os.environ.get('TORCH_MIGRAPHX_LOG_DYNAMO_LOWER', None)
+if DYNAMO_LOGLEVEL:
+    _LOGGER.setLevel(DYNAMO_LOGLEVEL)
 
 
 def lower_aten_to_mgx(gm: torch.fx.GraphModule,
@@ -58,25 +65,32 @@ def lower_aten_to_mgx(gm: torch.fx.GraphModule,
         torch.fx.GraphModule: GraphModule contatning MGXModule objects for supported subgraphs
     """
     verbose = kwargs['verbose'] if 'verbose' in kwargs else False
-    if verbose:
-        print_graph_info('Traced Model', gm, example_inputs)
 
     optim_gm = pre_partition_pass(gm)
     partition(optim_gm, verbose=verbose)
 
-    for name, mod in optim_gm.named_children():
-        # Const folded params can show up as "child objects"
-        if not isinstance(mod, torch.fx.GraphModule):
-            continue
+    log_level = min(_LOGGER.level, logging.INFO) if verbose else _LOGGER.level
+    with SetLogLevel(_LOGGER, log_level):
+        for name, mod in optim_gm.named_children():
+            # Const folded params can show up as "child objects"
+            if not isinstance(mod, torch.fx.GraphModule):
+                continue
 
-        mod = post_partition_pass(mod)
-        partition_inputs = get_partition_inputs(optim_gm, mod, example_inputs)
-        if verbose:
-            print_graph_info(name, mod, partition_inputs)
+            mod = post_partition_pass(mod)
+            partition_inputs = get_partition_inputs(partitioned_gm, mod,
+                                                    example_inputs)
 
-        mgx_mod = lower_subgraph(mod, partition_inputs, name=name, **kwargs)
+            _LOGGER.info(f"Lowering subgraph: {name}")
+            _LOGGER.info(
+                f"Subgraph inputs: {get_input_info(partition_inputs)}")
+            _LOGGER.info(f"Subgraph:\n{get_graph_info(mod.graph)}")
 
-        setattr(optim_gm, name, mgx_mod)
+            mgx_mod = lower_subgraph(mod,
+                                     partition_inputs,
+                                     name=name,
+                                     **kwargs)
+
+            setattr(optim_gm, name, mgx_mod)
 
     return optim_gm
 
@@ -94,34 +108,26 @@ def lower_subgraph(module: torch.fx.GraphModule,
         MGXModule: Callable module that executes graph via MIGraphX
     """
 
-    verbose = kwargs['verbose'] if 'verbose' in kwargs else False
     fp16 = kwargs['fp16'] if 'fp16' in kwargs else False
     deallocate = kwargs['deallocate'] if 'deallocate' in kwargs else False
     exhaustive_tune = kwargs[
         'exhaustive_tune'] if 'exhaustive_tune' in kwargs else False
     save_mxr = kwargs['save_mxr'] if 'save_mxr' in kwargs else False
-    print_uncompiled = (kwargs['print_parsed_program']
-                        if 'print_parsed_program' in kwargs else False)
-    print_compiled = (kwargs['print_compiled_program']
-                      if 'print_compiled_program' in kwargs else False)
 
-    interpreter = MGXInterpreter(module,
-                                 inputs,
-                                 deallocate=deallocate,
-                                 verbose_log=verbose)
+    interpreter = MGXInterpreter(module, inputs, deallocate=deallocate)
     interpreter.run()
 
     if save_mxr:
         name = f"{kwargs['name']}.mxr" if 'name' in kwargs else "prog.mxr"
         migraphx.save(interpreter.program, name)
 
-    if print_uncompiled: interpreter.program.print()
+    _LOGGER.debug(f"Interpreted Program:\n{interpreter.program}")
 
     mgx_module = MGXModule(program=interpreter.program,
                            input_names=interpreter.get_input_names(),
                            quantize_fp16=fp16,
                            exhaustive_tune=exhaustive_tune)
 
-    if print_compiled: mgx_module.program.print()
+    _LOGGER.debug(f"Compiled Program:\n{mgx_module.program}")
 
     return mgx_module
