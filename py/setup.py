@@ -120,6 +120,7 @@ setup(
     description='Intergrate PyTorch with MIGraphX acceleration engine',
     long_description_content_type='text/markdown',
     long_description=long_description,
+    setup_requires=["cmake"],
     install_requires=[
     "torch>=1.11.0",
     "numpy>=1.20.0",
