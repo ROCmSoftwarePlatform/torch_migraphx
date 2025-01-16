@@ -200,7 +200,66 @@ def acc_ops_nll_loss(mgx_module, node, args, kwargs):
         return MGXInstruction(loss), MGXInstruction(weight_sum)
     
     return MGXInstruction(loss)
+
+
+# ROI_Align converter invokes MigraphX op of the same name.  See comment below on the
+# idiosyncratic use of the batch dimension for this op.
+@migraphx_converter(acc_ops.roi_align)
+def acc_ops_roi_align(mgx_module, node, args, kwargs):
+    inp = kwargs['input']
+    inp_instr_ref = inp.instr_ref
+    boxes_ref = kwargs['boxes'].instr_ref
+    output_size = kwargs['output_size']
+
+    transformation_mode = 'half_pixel' if kwargs['aligned'] else 'output_half_pixel'    
+    spatial_scale = kwargs['spatial_scale']
+    sampling_ratio = kwargs['sampling_ratio']
     
+    # "boxes" and "roi" both refer to the same region of interest boxes.  Each box has
+    # associated with it an index that tells which layer (in the batch dimension) it
+    # is to be applied to.  A box is _not_ applied equally to each batch layer, unless
+    # duplicate boxes are explicitly provided.  This makes the term "batch" rather
+    # misleading for this operation.
+    if boxes_ref.shape().lens()[1] == 5:
+        roi_indices = mgx_module.add_literal(
+                torch.tensor([1, 2, 3, 4], dtype=torch.int64).numpy())
+        # split off the 0'th column of boxes
+        boxes2 = mgx_module.add_instruction(
+            migraphx.op('gather', axis=1), [boxes_ref, roi_indices])
+        zero_indices = mgx_module.add_literal(
+                torch.tensor([0,], dtype=torch.int64).numpy())
+        batch_indices_1 = mgx_module.add_instruction(
+            migraphx.op('gather', axis=1), [boxes_ref, zero_indices])
+        batch_indices2 =  mgx_module.add_instruction(
+            migraphx.op('squeeze', axes=0), [batch_indices_1])
+        batch_indices = mgx_module.add_instruction( migraphx.op('convert', target_type=migraphx.shape.type_t.int32_type),
+            [batch_indices2])
+    elif boxes_ref.shape().lens()[1] == 4:
+        # TODO:  Add support for boxes input in form List[Tensor[L, 4]].  We will
+        # need to create a default index list (0, 1, 2...) something like this:
+        # batch_indices=range(boxes_ref.shape().lens()[0])
+        # boxes2 = boxes_ref
+        # This input format is not allowed by aten package's roi_align.
+        raise RuntimeError('List[Tensor[L, 4]] boxes input for roi_align() not currently supported')
+    else:
+        raise RuntimeError('boxes input must be Tensor[K, 5]')
+
+    temp_instr = mgx_module.add_instruction(
+        migraphx.op('roialign', coordinate_transformation_mode=transformation_mode,
+                    output_height=output_size[0],
+                    output_width=output_size[1],
+                    spatial_scale = spatial_scale,
+                    sampling_ratio = sampling_ratio),
+                    [inp_instr_ref, boxes2, batch_indices])
+    
+    # It's not clear why this returns the right results in the wrong shape, but
+    # it now must be reshaped:
+    lens = temp_instr.shape().lens()
+    result =  mgx_module.add_instruction(
+        migraphx.op('reshape', dims=[lens[0], lens[1], lens[3], lens[2]]), [temp_instr])
+
+    return MGXInstruction(result)
+
 
 @migraphx_converter(acc_ops.hardtanh)
 @migraphx_converter(acc_ops.clamp)
