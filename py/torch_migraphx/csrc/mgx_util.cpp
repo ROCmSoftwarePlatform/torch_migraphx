@@ -36,6 +36,7 @@ const std::unordered_map<torch::ScalarType, std::string>& torch_mgx_type_map() {
   static const std::unordered_map<torch::ScalarType, std::string> at_mgx_type_map = {
       {torch::kFloat32, "float_type"},
       {torch::kFloat16,  "half_type"},
+      {torch::kBFloat16,  "bf16_type"},
       {torch::kFloat64, "double_type"},
       {torch::kInt32, "int32_type"},
       {torch::kInt16, "int16_type"},
@@ -50,6 +51,7 @@ const std::unordered_map<std::string, torch::ScalarType>& mgx_torch_type_map() {
   static const std::unordered_map<std::string, torch::ScalarType> mgx_at_type_map = {
       {"float_type", torch::kFloat32},
       {"half_type", torch::kFloat16},
+      {"bf16_type", torch::kBFloat16},
       {"double_type", torch::kFloat64},
       {"int32_type", torch::kInt32},
       {"int16_type", torch::kInt16},
