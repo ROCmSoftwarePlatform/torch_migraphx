@@ -36,22 +36,22 @@ def test_quant_vision_model(model_name, model_weights, rtol, atol, asymm,
 
     sample_inputs = [torch.randn(4, 3, 244, 244)]
 
-    model_export = stable_pre_aot_export(model, sample_inputs)
-
-    quantizer = MGXQuantizer(asymmetric_activations=asymm)
-    m = prepare_pt2e(model_export, quantizer)
-
-    # psudo calibrate
     with torch.no_grad():
+        model_export = stable_pre_aot_export(model, sample_inputs)
+
+        quantizer = MGXQuantizer(asymmetric_activations=asymm)
+        m = prepare_pt2e(model_export, quantizer)
+
+        # psudo calibrate
         m(*sample_inputs)
 
-    q_m = stable_convert_pt2e(m)
-    torch_q_mod = copy.deepcopy(q_m)
+        q_m = stable_convert_pt2e(m)
+        torch_q_mod = copy.deepcopy(q_m)
 
-    mgx_mod = torch.compile(q_m.cuda(), backend='migraphx')
+        mgx_mod = torch.compile(q_m.cuda(), backend='migraphx')
 
-    verify_outputs(torch_fp32_mod, torch_q_mod, mgx_mod, sample_inputs, rtol,
-                   atol)
+        verify_outputs(torch_fp32_mod, torch_q_mod, mgx_mod, sample_inputs, rtol,
+                    atol)
 
     del mgx_mod, model, torch_fp32_mod, torch_q_mod, model_export
 
@@ -76,24 +76,25 @@ def test_quant_LLM(model_class, tokenizer_class, model_name, rtol, atol, asymm,
     inputs = [encoded_input["input_ids"]]
     gold_output = model(*inputs)
 
-    model_export = stable_pre_aot_export(model, inputs)
+    with torch.no_grad():
+        model_export = stable_pre_aot_export(model, inputs)
 
-    quantizer = MGXQuantizer(asymmetric_activations=asymm)
-    m = prepare_pt2e(model_export, quantizer)
-    m(*inputs)
-    q_m = stable_convert_pt2e(m)
-    torch_q_mod = copy.deepcopy(q_m)
+        quantizer = MGXQuantizer(asymmetric_activations=asymm)
+        m = prepare_pt2e(model_export, quantizer)
+        m(*inputs)
+        q_m = stable_convert_pt2e(m)
+        torch_q_mod = copy.deepcopy(q_m)
 
-    q_m = move_q_gm_to_device(q_m)
+        q_m = move_q_gm_to_device(q_m)
 
-    mgx_mod = torch.compile(q_m, backend='migraphx').cuda()
+        mgx_mod = torch.compile(q_m, backend='migraphx').cuda()
 
-    torch_fp32_out, torch_q_out, mgx_out = compute_quantized_outputs(
-        torch_fp32_mod, torch_q_mod, mgx_mod, inputs)
-    verify_quantized_outputs(torch_fp32_out.last_hidden_state,
-                             torch_q_out.last_hidden_state,
-                             mgx_out["last_hidden_state"],
-                             rtol=rtol,
-                             atol=atol)
+        torch_fp32_out, torch_q_out, mgx_out = compute_quantized_outputs(
+            torch_fp32_mod, torch_q_mod, mgx_mod, inputs)
+        verify_quantized_outputs(torch_fp32_out.last_hidden_state,
+                                torch_q_out.last_hidden_state,
+                                mgx_out["last_hidden_state"],
+                                rtol=rtol,
+                                atol=atol)
 
     del mgx_mod, model, model_export, q_m
