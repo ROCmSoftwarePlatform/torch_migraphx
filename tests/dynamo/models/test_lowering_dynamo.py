@@ -2,9 +2,11 @@ import pytest
 import torch
 import torch_migraphx
 import torchvision.models as models
+import os
 
 DEFAULT_RTOL, DEFAULT_ATOL = 3e-3, 1e-2
 
+os.environ["MIGRAPHX_DISABLE_HIPBLASLT_GEMM"] = "1"
 
 @pytest.mark.parametrize("model, rtol, atol", [
     (models.wide_resnet50_2(), DEFAULT_RTOL, DEFAULT_ATOL),
