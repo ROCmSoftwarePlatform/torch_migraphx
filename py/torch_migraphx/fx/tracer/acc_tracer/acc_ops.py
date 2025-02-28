@@ -34,6 +34,12 @@ import warnings
 import torch
 from typing import cast, Iterable, List, Sequence
 
+from sys import modules
+try:
+    import torchvision
+except ImportError:
+    # torchvision is not a mandatory dependency, so may not be present
+    pass
 import torch.nn as nn
 from torch.fx.passes.shape_prop import _extract_tensor_metadata
 from packaging import version
@@ -371,6 +377,28 @@ def nll_loss(*, input, target, weight=None, reduce=None, reduction='mean', size_
 @register_acc_op
 def clamp(*, input, min=None, max=None):
     return torch.clamp(input=input, min=min, max=max)
+
+
+if 'torchvision' in modules:
+    @register_acc_op_mapping(
+        op_and_target=("call_function", torchvision.ops.roi_align),
+        arg_replacement_tuples=[
+            ("input", "input", False),
+            ("boxes", "boxes", False),
+            ("output_size", "output_size", False),
+            ("spatial_scale", "spatial_scale", this_arg_is_optional),
+            ("sampling_ratio", "sampling_ratio", this_arg_is_optional),
+            ("aligned", "aligned", this_arg_is_optional),
+        ],
+    )
+    @register_acc_op
+    def roi_align(*, input, boxes, output_size,
+                spatial_scale = 1.0,
+                sampling_ratio = -1,
+                aligned = False):
+        return torchvision.ops.roi_align(input=input, boxes=boxes, output_size = output_size, 
+                                        spatial_scale = spatial_scale, 
+                                        sampling_ratio = sampling_ratio, aligned = aligned)
 
 
 @register_acc_op_properties(AccOpProperty.unary)
